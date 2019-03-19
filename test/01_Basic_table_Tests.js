@@ -42,22 +42,40 @@ function createDevTableService() {
 }
 
 describe("Table HTTP Api tests", () => {
-  
+
   const azurite = new Azurite();
+  const tableEntities = [
+    {
+      PartitionKey: entGen.String(partitionKeyForTest),
+      RowKey: entGen.String(rowKeyForTestEntity1),
+      description: entGen.String("foo"),
+      dueDate: entGen.DateTime(new Date(Date.UTC(2018, 12, 25)))
+    },
+    {
+      PartitionKey: entGen.String(partitionKeyForTest),
+      RowKey: entGen.String(rowKeyForTestEntity2),
+      description: entGen.String("bar"),
+      dueDate: entGen.DateTime(new Date(Date.UTC(2018, 12, 26)))
+    },
+    {
+      PartitionKey: entGen.String(partitionKeyForTest),
+      RowKey: entGen.String("a-a"),
+      description: entGen.String("something")
+    },
+    {
+      PartitionKey: entGen.String(partitionKeyForTest),
+      RowKey: entGen.String("a-b"),
+      description: entGen.String("something")
+    },
+    {
+      PartitionKey: entGen.String(partitionKeyForTest),
+      RowKey: entGen.String("a-c"),
+      description: entGen.String("something")
+    }
+  ];
 
-  const tableEntity1 = {
-    PartitionKey: entGen.String(partitionKeyForTest),
-    RowKey: entGen.String(rowKeyForTestEntity1),
-    description: entGen.String("foo"),
-    dueDate: entGen.DateTime(new Date(Date.UTC(2018, 12, 25))),
-  };
-
-  const tableEntity2 = {
-    PartitionKey: entGen.String(partitionKeyForTest),
-    RowKey: entGen.String(rowKeyForTestEntity2),
-    description: entGen.String("bar"),
-    dueDate: entGen.DateTime(new Date(Date.UTC(2018, 12, 26))),
-  };
+  const tableEntity1 = tableEntities[0];
+  const tableEntity2 = tableEntities[1];
 
   // set us up the tests!
   const testDBLocation = path.join(process.env.AZURITE_LOCATION, tableTestPath);
@@ -79,12 +97,17 @@ describe("Table HTTP Api tests", () => {
             response
           ) {
             if (error === null) {
-              tableService.insertEntity(tableName, tableEntity2, function(
+              tableService.insertEntity(tableName, tableEntity2, function (
                 error,
                 result,
                 response
               ) {
-                done(error);
+                if (error == null) {
+                  insertEntity(2, done);
+                }
+                else {
+                  done(error);
+                }
               });
             } else {
               done(error);
@@ -93,6 +116,23 @@ describe("Table HTTP Api tests", () => {
         })
       );
   });
+
+  function insertEntity(entityCount, cb) {
+    if (entityCount < tableEntities.length) {
+      tableService.insertEntity(tableName, tableEntities[entityCount], function (error, result, response) {
+        if (error === null) {
+          insertEntity(++entityCount, cb);
+        }
+        else {
+          cb(error);
+        }
+      }
+      );
+    }
+    else {
+      cb();
+    }
+  }
 
   // JSON response described here (but we are using storage SDK)
   // https://docs.microsoft.com/en-us/rest/api/storageservices/query-entities
@@ -129,18 +169,18 @@ describe("Table HTTP Api tests", () => {
         }
       );
     });
-  
+
 
     it("should retrieve all Entities", (done) => {
       const query = new azureStorage.TableQuery();
       const retrievalTableService = createDevTableService();
-      retrievalTableService.queryEntities(tableName, query, null, function(
+      retrievalTableService.queryEntities(tableName, query, null, function (
         error,
         results,
         response
       ) {
         expect(error).to.equal(null);
-        expect(results.entries.length).to.equal(2);
+        expect(results.entries.length).to.equal(tableEntities.length);
         const sortedResults = results.entries.sort();
         expect(sortedResults[0].description._).to.equal(
           tableEntity1.description._
@@ -155,6 +195,77 @@ describe("Table HTTP Api tests", () => {
           new Date(Date.UTC(2018, 12, 25)).toISOString().split(".")[0] + "Z"
         );
         done();
+      });
+    });
+
+    it("should retrieve no more than top() specified results", (done) => {
+      const query = new azureStorage.TableQuery()
+        .top(1)
+        .where("RowKey ge 'a-'");
+      const retrievalTableService = azureStorage.createTableService(
+        "UseDevelopmentStorage=true"
+      );
+      retrievalTableService.queryEntities(tableName, query, null, function (
+        error,
+        results,
+        response
+      ) {
+        expect(error).to.equal(null);
+        expect(results.entries.length).to.equal(1);
+        done();
+      });
+    });
+
+    it("should return a continuation token", (done) => {
+      const query = new azureStorage.TableQuery()
+        .top(1)
+        .where("RowKey ge 'a-'");
+      const retrievalTableService = azureStorage.createTableService(
+        "UseDevelopmentStorage=true"
+      );
+      retrievalTableService.queryEntities(tableName, query, null, function (
+        error,
+        results,
+        response
+      ) {
+        expect(error).to.equal(null);
+        expect(results.continuationToken).not.to.equal(null);
+        done();
+      });
+    });
+
+    it("should allow pagination of result set", (done) => {
+      const query = new azureStorage.TableQuery()
+        .top(1)
+        .where("RowKey ge 'a-'");
+      const retrievalTableService = azureStorage.createTableService(
+        "UseDevelopmentStorage=true"
+      );
+
+      retrievalTableService.queryEntities(tableName, query, null, function (error, results) {
+        expect(error).to.equal(null);
+        expect(results.continuationToken).not.to.equal(null);
+
+        let entries = results.entries;
+        expect(entries.length).to.equal(1);
+        expect(entries[0].RowKey._).to.equal(tableEntities[2].RowKey._);
+        retrievalTableService.queryEntities(tableName, query, results.continuationToken, function (error, results) {
+          expect(error).to.equal(null);
+          expect(results.continuationToken).not.to.equal(null);
+
+          let entries = results.entries;
+          expect(entries.length).to.equal(1);
+          expect(entries[0].RowKey._).to.equal(tableEntities[3].RowKey._);
+          retrievalTableService.queryEntities(tableName, query, results.continuationToken, function (error, results) {
+            expect(error).to.equal(null);
+            expect(results.continuationToken).to.equal(null);
+
+            let entries = results.entries;
+            expect(entries.length).to.equal(1);
+            expect(entries[0].RowKey._).to.equal(tableEntities[4].RowKey._);
+            done();
+          });
+        });
       });
     });
 
@@ -181,7 +292,7 @@ describe("Table HTTP Api tests", () => {
         .top(5)
         .where("RowKey eq ?", "unknownRowKeyForFindError");
       const faillingFindTableService = createDevTableService();
-      faillingFindTableService.queryEntities(tableName, query, null, function(
+      faillingFindTableService.queryEntities(tableName, query, null, function (
         error,
         results,
         response
